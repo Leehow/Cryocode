@@ -62,7 +62,9 @@ impl Format {
     pub fn default_view(self) -> ViewMode {
         match self {
             Self::Spreadsheet | Self::Image => ViewMode::Preview,
-            _ => ViewMode::Source,
+            Self::Code => ViewMode::Source,
+            // Anything with a rendered form opens side by side with its source.
+            _ => ViewMode::Split,
         }
     }
 
