@@ -72,7 +72,7 @@ impl Format {
     pub fn preview_label(self) -> &'static str {
         match self {
             Self::Markdown | Self::Latex => "预览",
-            Self::Json | Self::Yaml | Self::Toml | Self::Xml => "树",
+            Self::Json | Self::Yaml | Self::Toml | Self::Xml => "预览",
             Self::Csv | Self::Tsv | Self::Spreadsheet => "表格",
             Self::Image => "图像",
             Self::Code => "",

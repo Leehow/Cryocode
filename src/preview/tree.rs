@@ -437,6 +437,46 @@ fn records_table(records: &[&XmlNode]) -> (Vec<String>, Vec<Vec<String>>) {
     (cols, rows)
 }
 
+/// XML as the common data model, for the document view: attributes become `@name`
+/// fields, repeated child elements become lists, text-only elements become strings.
+pub fn xml_to_value(node: &XmlNode) -> Value {
+    fn conv(n: &XmlNode) -> Value {
+        let XmlNode::Element { attrs, children, .. } = n else {
+            return match n {
+                XmlNode::Text(t) => Value::Str(t.clone()),
+                _ => Value::Null,
+            };
+        };
+        let texts: Vec<&str> = children.iter().filter_map(|c| if let XmlNode::Text(t) = c { Some(t.as_str()) } else { None }).collect();
+        let elems: Vec<&XmlNode> = children.iter().filter(|c| matches!(c, XmlNode::Element { .. })).collect();
+        if attrs.is_empty() && elems.is_empty() {
+            return if texts.is_empty() { Value::Null } else { Value::Str(texts.join(" ")) };
+        }
+        let mut out: Vec<(String, Value)> = attrs.iter().map(|(k, v)| (format!("@{k}"), Value::Str(v.clone()))).collect();
+        if !texts.is_empty() {
+            out.push(("#text".into(), Value::Str(texts.join(" "))));
+        }
+        for e in elems {
+            let XmlNode::Element { name, .. } = e else { continue };
+            let v = conv(e);
+            match out.iter_mut().find(|(k, _)| k == name) {
+                // `conv` never yields a list itself, so a list here came from an earlier repeat.
+                Some((_, Value::Arr(list))) => list.push(v),
+                Some((_, existing)) => {
+                    let first = std::mem::replace(existing, Value::Null);
+                    *existing = Value::Arr(vec![first, v]);
+                }
+                None => out.push((name.clone(), v)),
+            }
+        }
+        Value::Obj(out)
+    }
+    match node {
+        XmlNode::Element { name, .. } => Value::Obj(vec![(name.clone(), conv(node))]),
+        other => conv(other),
+    }
+}
+
 pub fn show_xml(ui: &mut egui::Ui, node: &XmlNode, p: &Palette, id: Id, depth: usize) {
     ui.spacing_mut().item_spacing.y = 2.0;
     let mono = |s: &str, c: Color32| RichText::new(s).monospace().color(c);

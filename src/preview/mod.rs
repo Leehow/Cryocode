@@ -1,5 +1,6 @@
 //! Rendered views of documents: Markdown, LaTeX, data trees, tables, images.
 
+pub mod doc_view;
 pub mod latex;
 pub mod markdown;
 pub mod table;
@@ -44,7 +45,9 @@ enum Parsed {
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum DataMode {
+    /// Shape-aware readable layout (property sheets, sections, chips, tables).
     #[default]
+    Doc,
     Tree,
     Table,
 }
@@ -54,6 +57,8 @@ pub struct PreviewState {
     revision: Option<u64>,
     parsed: Parsed,
     json_table: Option<table::Table>,
+    /// XML mapped onto the common data model, for the document view.
+    xml_value: Option<tree::Value>,
     pub data_mode: DataMode,
     heights: Vec<f32>,
     width_key: f32,
@@ -72,7 +77,8 @@ impl Default for PreviewState {
             revision: None,
             parsed: Parsed::None,
             json_table: None,
-            data_mode: DataMode::Tree,
+            xml_value: None,
+            data_mode: DataMode::Doc,
             heights: Vec::new(),
             width_key: 0.0,
             parsed_at: Instant::now() - Duration::from_secs(10),
@@ -116,8 +122,12 @@ impl PreviewState {
             Parsed::Xml(Ok(n)) => tree::xml_table(n).map(|(h, r)| table::Table::new(h, r)),
             _ => None,
         };
-        if self.json_table.is_none() {
-            self.data_mode = DataMode::Tree;
+        self.xml_value = match &self.parsed {
+            Parsed::Xml(Ok(n)) => Some(tree::xml_to_value(n)),
+            _ => None,
+        };
+        if self.json_table.is_none() && self.data_mode == DataMode::Table {
+            self.data_mode = DataMode::Doc;
         }
         self.revision = Some(doc.revision);
         self.parsed_at = Instant::now();
@@ -125,6 +135,10 @@ impl PreviewState {
 
     pub fn has_table_mode(&self) -> bool {
         self.json_table.is_some()
+    }
+
+    pub fn is_data(&self) -> bool {
+        matches!(self.parsed, Parsed::Data(_) | Parsed::Xml(_))
     }
 }
 
@@ -184,6 +198,10 @@ pub fn show(ui: &mut egui::Ui, doc: &Document, state: &mut PreviewState, res: &m
                         return;
                     }
                 }
+                if state.data_mode == DataMode::Doc {
+                    doc_page(ui, v, &palette, id, &mut cx.clicked_link);
+                    return;
+                }
                 egui::ScrollArea::both().id_salt(id).auto_shrink([false, false]).show(ui, |ui| {
                     tree::TreeUi { palette, copied: &mut copied }.show_root(ui, v, id.with("root"));
                 });
@@ -193,6 +211,9 @@ pub fn show(ui: &mut egui::Ui, doc: &Document, state: &mut PreviewState, res: &m
         Parsed::Xml(result) => padded(ui, |ui| match result {
             Ok(_) if state.data_mode == DataMode::Table && state.json_table.is_some() => {
                 table::show(ui, state.json_table.as_ref().unwrap(), &palette, id);
+            }
+            Ok(_) if state.data_mode == DataMode::Doc && state.xml_value.is_some() => {
+                doc_page(ui, state.xml_value.as_ref().unwrap(), &palette, id, &mut cx.clicked_link);
             }
             Ok(n) => {
                 egui::ScrollArea::both().id_salt(id).auto_shrink([false, false]).show(ui, |ui| {
@@ -232,6 +253,22 @@ pub fn show(ui: &mut egui::Ui, doc: &Document, state: &mut PreviewState, res: &m
         ui.ctx().copy_text(c);
     }
     cx.clicked_link
+}
+
+/// The document view in a scrollable, centred reading column.
+fn doc_page(ui: &mut egui::Ui, v: &tree::Value, p: &Palette, id: Id, link: &mut Option<String>) {
+    egui::ScrollArea::vertical().id_salt(id.with("doc")).auto_shrink([false, false]).show(ui, |ui| {
+        let col = (ui.available_width() - 16.0).clamp(200.0, 880.0);
+        ui.vertical(|ui| {
+            ui.set_width(col);
+            let mut view = doc_view::DocView { p, clicked_link: None };
+            view.show(ui, v);
+            ui.add_space(80.0);
+            if view.clicked_link.is_some() {
+                *link = view.clicked_link;
+            }
+        });
+    });
 }
 
 fn padded(ui: &mut egui::Ui, f: impl FnOnce(&mut egui::Ui)) {

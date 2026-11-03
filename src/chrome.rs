@@ -213,7 +213,10 @@ impl App {
     fn view_switch_width(&self) -> f32 {
         match self.doc() {
             Some(d) if d.format.has_preview() && !d.format.is_binary() => {
-                let extra = if self.previews.get(&d.id).is_some_and(|s| s.has_table_mode()) && d.view != ViewMode::Source { 100.0 } else { 0.0 };
+                let extra = match self.previews.get(&d.id) {
+                    Some(s) if s.is_data() && d.view != ViewMode::Source => if s.has_table_mode() { 160.0 } else { 110.0 },
+                    _ => 0.0,
+                };
                 170.0 + extra
             }
             _ => 0.0,
@@ -237,11 +240,15 @@ impl App {
         }
         if current != ViewMode::Source {
             if let Some(state) = self.previews.get_mut(&id) {
-                if state.has_table_mode() {
+                if state.is_data() {
                     ui.add_space(8.0);
                     let mut mode = None;
-                    segmented(ui, p, &[("树", state.data_mode == DataMode::Tree), ("表格", state.data_mode == DataMode::Table)], |i| {
-                        mode = Some(if i == 0 { DataMode::Tree } else { DataMode::Table });
+                    let mut opts = vec![("文档", state.data_mode == DataMode::Doc), ("树", state.data_mode == DataMode::Tree)];
+                    if state.has_table_mode() {
+                        opts.push(("表格", state.data_mode == DataMode::Table));
+                    }
+                    segmented(ui, p, &opts, |i| {
+                        mode = Some([DataMode::Doc, DataMode::Tree, DataMode::Table][i]);
                     });
                     if let Some(m) = mode {
                         state.data_mode = m;
