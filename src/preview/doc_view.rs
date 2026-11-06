@@ -31,7 +31,8 @@ fn is_scalar(v: &Value) -> bool {
 /// Values that fit on one line of a property sheet.
 fn is_inline(v: &Value) -> bool {
     match v {
-        Value::Arr(a) => a.len() <= MAX_CHIPS && a.iter().all(is_scalar) && a.iter().map(|x| x.brief().chars().count()).sum::<usize>() < 400,
+        // Tags are for short values only; sentences read better as a list.
+        Value::Arr(a) => a.len() <= MAX_CHIPS && a.iter().all(|x| is_scalar(x) && x.brief().chars().count() <= 40) && a.iter().map(|x| x.brief().chars().count()).sum::<usize>() < 400,
         Value::Obj(o) => o.is_empty(),
         _ => true,
     }
@@ -116,11 +117,17 @@ impl DocView<'_> {
                 }
             }
         }
-        let (simple, nested): (Vec<_>, Vec<_>) = entries.iter().partition(|(_, v)| is_inline(v));
-        if !simple.is_empty() {
-            self.property_sheet(ui, &simple);
-        }
-        for (k, v) in nested {
+        // Keep the file's order: consecutive simple fields share one sheet, nested values become sections.
+        let mut run: Vec<&(String, Value)> = Vec::new();
+        for entry in entries {
+            if is_inline(&entry.1) {
+                run.push(entry);
+                continue;
+            }
+            if !run.is_empty() {
+                self.property_sheet(ui, &std::mem::take(&mut run));
+            }
+            let (k, v) = (&entry.0, &entry.1);
             let detail = match v {
                 Value::Arr(a) => Some(format!("{} 项", a.len())),
                 Value::Obj(o) => Some(format!("{} 个字段", o.len())),
@@ -146,6 +153,9 @@ impl DocView<'_> {
                     }
                 });
             });
+        }
+        if !run.is_empty() {
+            self.property_sheet(ui, &run);
         }
     }
 

@@ -36,6 +36,8 @@ pub struct Document {
     pub load_error: Option<String>,
     pub scroll_fraction: f32,
     pub edit: crate::editor::EditState,
+    /// Syntax problems (byte offset, message) found by the data parser, drawn as squiggles.
+    pub diagnostics: Vec<(usize, String)>,
     /// One-shot request for the editor to select this byte range and scroll there.
     pub goto: Option<(usize, usize)>,
     pub cursor: (usize, usize),
@@ -100,6 +102,7 @@ impl Document {
             load_error: None,
             scroll_fraction: 0.0,
             edit: Default::default(),
+            diagnostics: Vec::new(),
             goto: None,
             cursor: (1, 1),
             selection_chars: 0,

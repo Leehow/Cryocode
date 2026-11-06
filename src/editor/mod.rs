@@ -301,6 +301,8 @@ pub fn show(
     let content_h = total_rows as f32 * row_h + MARGIN_TOP + content.height() * 0.5;
 
     let mut gutter_rows: Vec<(usize, f32, bool)> = Vec::new();
+    let diagnostics = doc.diagnostics.clone();
+    let mut diag_lines: std::collections::HashSet<usize> = Default::default();
     let mut out = EditorOutput { scroll_fraction: doc.scroll_fraction, scrolled: false };
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(content));
     let caret_line = text::line_of(&cache.starts, doc.edit.sel.head);
@@ -381,6 +383,30 @@ pub fn show(
             }
             let g = geo.galley(ui, ri);
             painter.galley(pos2(origin.x, y + (row_h - g.size().y) * 0.5), g, p.text);
+            // Syntax problems: a red wavy underline under the offending character.
+            for (off, msg) in &diagnostics {
+                if *off < row.start || *off > row.end || (*off == row.end && row.end != row.start && geo.doc.text.as_bytes().get(row.end) != Some(&b'\n')) {
+                    continue;
+                }
+                let x0 = origin.x + geo.x_of(ui, ri, *off);
+                let next = text::next_char(&geo.doc.text, *off).min(row.end);
+                let x1 = (origin.x + geo.x_of(ui, ri, next)).max(x0 + digit_w);
+                let base = y + row_h - 4.0;
+                let mut pts = Vec::new();
+                let mut x = x0;
+                let mut up = true;
+                while x <= x1 {
+                    pts.push(pos2(x, if up { base - 1.5 } else { base + 1.5 }));
+                    x += 2.5;
+                    up = !up;
+                }
+                painter.add(egui::Shape::line(pts, Stroke::new(1.3_f32, p.warn)));
+                diag_lines.insert(row.line as usize);
+                let hot = Rect::from_min_max(pos2(x0 - 2.0, y), pos2(x1 + 2.0, y + row_h));
+                if resp.hover_pos().is_some_and(|hp| hot.contains(hp)) {
+                    resp.show_tooltip_text(msg.as_str());
+                }
+            }
             let first_of_line = geo.cache.line_row[row.line as usize] as usize == ri;
             if first_of_line {
                 gutter_rows.push((row.line as usize + 1, y, row.line as usize == caret_line));
@@ -448,6 +474,9 @@ pub fn show(
     painter.rect_filled(gutter, 0.0, p.bg);
     let num_font = FontId::monospace(settings.font_size * 0.86);
     for (n, y, active) in gutter_rows {
+        if diag_lines.contains(&(n - 1)) {
+            painter.circle_filled(pos2(gutter.left() + 9.0, y + row_h * 0.5), 3.5, p.warn);
+        }
         painter.text(pos2(gutter.right() - 14.0, y + row_h * 0.5), egui::Align2::RIGHT_CENTER, n.to_string(), num_font.clone(), if active { p.text_dim } else { p.text_faint });
     }
     out

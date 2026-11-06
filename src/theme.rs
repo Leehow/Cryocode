@@ -80,6 +80,8 @@ pub struct Palette {
     pub number: Color32,
     pub keyword: Color32,
     pub warn: Color32,
+    /// Amber for "needs attention but not broken" (GitHub attention colour).
+    pub attention: Color32,
     pub ok: Color32,
 }
 
@@ -105,6 +107,7 @@ impl Palette {
                 number: Color32::from_rgb(0x79, 0xc0, 0xff),
                 keyword: Color32::from_rgb(0xff, 0x7b, 0x72),
                 warn: Color32::from_rgb(0xf8, 0x51, 0x49),
+                attention: Color32::from_rgb(0xd2, 0x99, 0x22),
                 ok: Color32::from_rgb(0x3f, 0xb9, 0x50),
             },
             // GitHub Light Default.
@@ -126,6 +129,7 @@ impl Palette {
                 number: Color32::from_rgb(0x05, 0x50, 0xae),
                 keyword: Color32::from_rgb(0xcf, 0x22, 0x2e),
                 warn: Color32::from_rgb(0xd1, 0x24, 0x2f),
+                attention: Color32::from_rgb(0x9a, 0x67, 0x00),
                 ok: Color32::from_rgb(0x1a, 0x7f, 0x37),
             },
         }

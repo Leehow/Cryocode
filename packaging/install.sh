@@ -19,8 +19,16 @@ cp packaging/Cryocode.icns "$APP/Contents/Resources/Cryocode.icns"
 sed "s/__VERSION__/$VERSION/g" packaging/Info.plist > "$APP/Contents/Info.plist"
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
 
-# Replace the installed bundle (quit a running copy first so the binary isn't busy).
-pkill -x cryocode 2>/dev/null || true
+# Replace the installed bundle. Quit a running copy the normal way so it can ask about
+# unsaved files; never force-kill it (that would silently discard edits).
+if pgrep -x cryocode >/dev/null; then
+  osascript -e 'tell application id "dev.cryocode.Cryocode" to quit' >/dev/null 2>&1 || true
+  for _ in $(seq 1 50); do pgrep -x cryocode >/dev/null || break; sleep 0.2; done
+  if pgrep -x cryocode >/dev/null; then
+    echo "Cryocode is still running (unsaved changes?). Quit it, then run this again." >&2
+    exit 1
+  fi
+fi
 rm -rf "$DEST"
 cp -R "$APP" "$DEST"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$DEST"

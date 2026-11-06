@@ -342,6 +342,15 @@ impl App {
             self.find.recompute(&self.docs[idx]);
         }
         let doc_id = doc.id;
+        // Data formats are parsed even in source-only view so the editor can mark syntax errors.
+        let is_data = matches!(doc.format, Format::Json | Format::Yaml | Format::Toml | Format::Xml);
+        if is_data && view == ViewMode::Source {
+            self.previews.entry(doc_id).or_default().refresh(ui.ctx(), &self.docs[idx]);
+        }
+        if is_data {
+            let problems = self.previews.get(&doc_id).map(|s| s.problems.clone()).unwrap_or_default();
+            self.docs[idx].diagnostics = problems.into_iter().map(|p| (p.offset, p.message)).collect();
+        }
         match view {
             ViewMode::Source => {
                 let doc = &mut self.docs[idx];
@@ -350,8 +359,8 @@ impl App {
             }
             ViewMode::Preview => {
                 let state = self.previews.entry(doc_id).or_default();
-                if let Some(link) = preview::show(ui, &self.docs[idx], state, &mut self.res, self.theme, None) {
-                    self.open_link(&link);
+                if let Some(a) = preview::show(ui, &self.docs[idx], state, &mut self.res, self.theme, None) {
+                    self.preview_action(idx, a);
                 }
             }
             ViewMode::Split => {
@@ -370,8 +379,8 @@ impl App {
                 let mut rui = ui.new_child(UiBuilder::new().max_rect(right));
                 let state = self.previews.entry(doc_id).or_default();
                 let sync = (!preview_drives && out.scrolled).then_some(out.scroll_fraction);
-                if let Some(link) = preview::show(&mut rui, &self.docs[idx], state, &mut self.res, self.theme, sync) {
-                    self.open_link(&link);
+                if let Some(a) = preview::show(&mut rui, &self.docs[idx], state, &mut self.res, self.theme, sync) {
+                    self.preview_action(idx, a);
                 }
             }
         }

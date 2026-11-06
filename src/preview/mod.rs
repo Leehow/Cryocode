@@ -1,5 +1,6 @@
 //! Rendered views of documents: Markdown, LaTeX, data trees, tables, images.
 
+pub mod data_parse;
 pub mod doc_view;
 pub mod latex;
 pub mod markdown;
@@ -69,6 +70,19 @@ pub struct PreviewState {
     pub fraction: f32,
     /// The rendered view moved last frame (user scroll, or a sync from the editor).
     pub scrolled: bool,
+    /// Positioned problems from the last parse (also drawn as squiggles in the editor).
+    pub problems: Vec<data_parse::Problem>,
+    /// The data is unparseable right now; the view shows the last version that parsed.
+    stale: bool,
+}
+
+/// Something the user asked for from inside the rendered view.
+pub enum PreviewAction {
+    OpenLink(String),
+    /// Select this byte offset in the source.
+    Goto(usize),
+    /// Insert commas at these byte offsets (one-click repair).
+    InsertCommas(Vec<usize>),
 }
 
 impl Default for PreviewState {
@@ -86,12 +100,15 @@ impl Default for PreviewState {
             last_synced_fraction: -1.0,
             fraction: 0.0,
             scrolled: false,
+            problems: Vec::new(),
+            stale: false,
         }
     }
 }
 
 impl PreviewState {
-    fn refresh(&mut self, ctx: &egui::Context, doc: &Document) {
+    /// Re-parse if the document changed (also used in source-only view, to keep diagnostics fresh).
+    pub fn refresh(&mut self, ctx: &egui::Context, doc: &Document) {
         if self.revision == Some(doc.revision) {
             return;
         }
@@ -103,8 +120,37 @@ impl PreviewState {
         self.parsed = match doc.format {
             Format::Markdown => Parsed::Markdown(markdown::parse(&doc.text)),
             Format::Latex => Parsed::Markdown(markdown::parse(&latex::to_markdown(&doc.text))),
-            Format::Json | Format::Yaml | Format::Toml => Parsed::Data(tree::parse_data(doc.format, &doc.text)),
-            Format::Xml => Parsed::Xml(tree::parse_xml(&doc.text)),
+            Format::Json | Format::Yaml | Format::Toml => {
+                let r = data_parse::parse_data(doc.format, &doc.text);
+                self.problems = r.problems;
+                match r.value {
+                    Some(v) => {
+                        self.stale = false;
+                        Parsed::Data(Ok(v))
+                    }
+                    // Keep showing the last good render while the text is broken.
+                    None if matches!(self.parsed, Parsed::Data(Ok(_))) => {
+                        self.stale = true;
+                        std::mem::replace(&mut self.parsed, Parsed::None)
+                    }
+                    None => Parsed::Data(Err(String::new())),
+                }
+            }
+            Format::Xml => {
+                let r = data_parse::parse_xml(&doc.text);
+                self.problems = r.problems;
+                match r.value {
+                    Some(n) => {
+                        self.stale = false;
+                        Parsed::Xml(Ok(n))
+                    }
+                    None if matches!(self.parsed, Parsed::Xml(Ok(_))) => {
+                        self.stale = true;
+                        std::mem::replace(&mut self.parsed, Parsed::None)
+                    }
+                    None => Parsed::Xml(Err(String::new())),
+                }
+            }
             Format::Csv => Parsed::Table(table::parse_delimited(&doc.text, b',')),
             Format::Tsv => Parsed::Table(table::parse_delimited(&doc.text, b'\t')),
             Format::Spreadsheet => Parsed::Table(match &doc.binary {
@@ -143,7 +189,7 @@ impl PreviewState {
 }
 
 /// Draw the preview for `doc`. `sync` carries the source editor's scroll fraction in split mode.
-pub fn show(ui: &mut egui::Ui, doc: &Document, state: &mut PreviewState, res: &mut PreviewResources, theme: ThemeKind, sync: Option<f32>) -> Option<String> {
+pub fn show(ui: &mut egui::Ui, doc: &Document, state: &mut PreviewState, res: &mut PreviewResources, theme: ThemeKind, sync: Option<f32>) -> Option<PreviewAction> {
     // `sync`: in split view, the editor's scroll fraction when the editor is the one being scrolled.
     state.refresh(ui.ctx(), doc);
     let palette = Palette::get(theme);
@@ -158,6 +204,7 @@ pub fn show(ui: &mut egui::Ui, doc: &Document, state: &mut PreviewState, res: &m
         clicked_link: None,
     };
     let id = Id::new(("preview", doc.id));
+    let mut banner_action: Option<PreviewAction> = None;
     match &mut state.parsed {
         Parsed::Markdown(blocks) => {
             let mut area = egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]);
@@ -190,7 +237,12 @@ pub fn show(ui: &mut egui::Ui, doc: &Document, state: &mut PreviewState, res: &m
             state.fraction = f;
             ui.data_mut(|d| d.insert_temp(id.with("content_h"), out.content_size.y));
         }
-        Parsed::Data(result) => padded(ui, |ui| match result {
+        Parsed::Data(result) => padded(ui, |ui| {
+            banner_action = problem_banner(ui, &state.problems, state.stale, &palette);
+            if state.stale {
+                ui.set_opacity(0.55);
+            }
+            match result {
             Ok(v) => {
                 if state.data_mode == DataMode::Table {
                     if let Some(t) = &state.json_table {
@@ -206,9 +258,15 @@ pub fn show(ui: &mut egui::Ui, doc: &Document, state: &mut PreviewState, res: &m
                     tree::TreeUi { palette, copied: &mut copied }.show_root(ui, v, id.with("root"));
                 });
             }
-            Err(e) => tree::error_box(ui, &palette, e),
+            Err(_) => {}
+            }
         }),
-        Parsed::Xml(result) => padded(ui, |ui| match result {
+        Parsed::Xml(result) => padded(ui, |ui| {
+            banner_action = problem_banner(ui, &state.problems, state.stale, &palette);
+            if state.stale {
+                ui.set_opacity(0.55);
+            }
+            match result {
             Ok(_) if state.data_mode == DataMode::Table && state.json_table.is_some() => {
                 table::show(ui, state.json_table.as_ref().unwrap(), &palette, id);
             }
@@ -220,7 +278,8 @@ pub fn show(ui: &mut egui::Ui, doc: &Document, state: &mut PreviewState, res: &m
                     tree::show_xml(ui, n, &palette, id.with("root"), 0);
                 });
             }
-            Err(e) => tree::error_box(ui, &palette, e),
+            Err(_) => {}
+            }
         }),
         Parsed::Table(result) => {
             let mut switch = None;
@@ -252,7 +311,56 @@ pub fn show(ui: &mut egui::Ui, doc: &Document, state: &mut PreviewState, res: &m
     if let Some(c) = copied {
         ui.ctx().copy_text(c);
     }
-    cx.clicked_link
+    banner_action.or(cx.clicked_link.map(PreviewAction::OpenLink))
+}
+
+/// Problems above the rendered data: where they are, a jump button, and a one-click fix when possible.
+fn problem_banner(ui: &mut egui::Ui, problems: &[data_parse::Problem], stale: bool, p: &Palette) -> Option<PreviewAction> {
+    let first = problems.first()?;
+    let fixable: Vec<usize> = problems.iter().filter_map(|x| x.insert_comma_at).collect();
+    let repaired = !stale && problems.iter().all(|x| x.is_fixable());
+    // Yellow: rendered after an automatic repair. Red: the text does not parse.
+    let color = if repaired { p.attention } else { p.warn };
+    let mut action = None;
+    egui::Frame::new()
+        .fill(color.gamma_multiply(0.09))
+        .stroke(egui::Stroke::new(1.0_f32, color.gamma_multiply(0.45)))
+        .corner_radius(8.0)
+        .inner_margin(egui::Margin::symmetric(12, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                let title = if repaired {
+                    format!("第 {} 行：{}", first.line, first.message)
+                } else {
+                    format!("第 {} 行第 {} 列：{}", first.line, first.col, first.message)
+                };
+                ui.label(egui::RichText::new(title).color(color).strong());
+                if problems.len() > 1 {
+                    ui.label(egui::RichText::new(format!("（另有 {} 处）", problems.len() - 1)).color(p.text_dim));
+                }
+                let btn = |text: String| egui::Button::new(egui::RichText::new(text).size(12.5).color(p.text)).fill(p.bg).stroke(egui::Stroke::new(1.0_f32, p.border)).corner_radius(5.0);
+                if ui.add(btn("定位".into())).on_hover_text("在源码中选中出错位置").clicked() {
+                    action = Some(PreviewAction::Goto(first.offset));
+                }
+                if !fixable.is_empty() {
+                    let label = if fixable.len() == 1 { "补上逗号".to_owned() } else { format!("补上 {} 个逗号", fixable.len()) };
+                    if ui.add(btn(label)).on_hover_text("直接修改文件内容，⌘Z 可撤销").clicked() {
+                        action = Some(PreviewAction::InsertCommas(fixable.clone()));
+                    }
+                }
+            });
+            let note = if repaired {
+                "下面按补上逗号后的样子预览；文件本身还没有改。"
+            } else if stale {
+                "下面显示的是上一次能解析的版本。"
+            } else {
+                "修正源码后会自动重新渲染。"
+            };
+            ui.label(egui::RichText::new(note).size(12.0).color(p.text_dim));
+        });
+    ui.add_space(6.0);
+    action
 }
 
 /// The document view in a scrollable, centred reading column.

@@ -1,6 +1,5 @@
 //! Collapsible tree views for structured data: JSON, YAML, TOML and XML.
 
-use crate::formats::Format;
 use crate::theme::Palette;
 use egui::collapsing_header::CollapsingState;
 use egui::{vec2, Color32, FontId, Id, RichText, Sense};
@@ -17,7 +16,7 @@ pub enum Value {
 }
 
 impl Value {
-    fn from_json(v: serde_json::Value) -> Self {
+    pub(crate) fn from_json(v: serde_json::Value) -> Self {
         match v {
             serde_json::Value::Null => Self::Null,
             serde_json::Value::Bool(b) => Self::Bool(b),
@@ -28,7 +27,7 @@ impl Value {
         }
     }
 
-    fn from_yaml(v: serde_yaml::Value) -> Self {
+    pub(crate) fn from_yaml(v: serde_yaml::Value) -> Self {
         use serde_yaml::Value as Y;
         match v {
             Y::Null => Self::Null,
@@ -51,7 +50,7 @@ impl Value {
         }
     }
 
-    fn from_toml(v: toml::Value) -> Self {
+    pub(crate) fn from_toml(v: toml::Value) -> Self {
         match v {
             toml::Value::String(s) => Self::Str(s),
             toml::Value::Integer(i) => Self::Num(i.to_string()),
@@ -85,96 +84,6 @@ impl Value {
             Value::Obj(o) => format!("{{{}}}", o.len()),
         }
     }
-}
-
-pub fn parse_data(format: Format, text: &str) -> Result<Value, String> {
-    match format {
-        Format::Json => {
-            let cleaned;
-            let src = if text.contains("//") || text.contains("/*") {
-                cleaned = strip_json_comments(text);
-                cleaned.as_str()
-            } else {
-                text
-            };
-            serde_json::from_str::<serde_json::Value>(src).map(Value::from_json).map_err(|e| format!("JSON 解析失败：第 {} 行第 {} 列：{e}", e.line(), e.column()))
-        }
-        Format::Yaml => {
-            let mut docs = Vec::new();
-            for d in serde_yaml::Deserializer::from_str(text) {
-                let v = <serde_yaml::Value as serde::Deserialize>::deserialize(d).map_err(|e| format!("YAML 解析失败：{e}"))?;
-                docs.push(Value::from_yaml(v));
-            }
-            Ok(if docs.len() == 1 { docs.pop().unwrap() } else { Value::Arr(docs) })
-        }
-        Format::Toml => toml::from_str::<toml::Value>(text).map(Value::from_toml).map_err(|e| format!("TOML 解析失败：{e}")),
-        _ => Err("不支持的格式".into()),
-    }
-}
-
-/// JSONC support: drop `//` and `/* */` comments and trailing commas outside strings.
-fn strip_json_comments(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    let mut in_str = false;
-    while let Some(c) = chars.next() {
-        if in_str {
-            out.push(c);
-            if c == '\\' {
-                if let Some(n) = chars.next() {
-                    out.push(n);
-                }
-            } else if c == '"' {
-                in_str = false;
-            }
-            continue;
-        }
-        match c {
-            '"' => {
-                in_str = true;
-                out.push(c);
-            }
-            '/' if chars.peek() == Some(&'/') => {
-                for n in chars.by_ref() {
-                    if n == '\n' {
-                        out.push('\n');
-                        break;
-                    }
-                }
-            }
-            '/' if chars.peek() == Some(&'*') => {
-                chars.next();
-                let mut prev = '\0';
-                for n in chars.by_ref() {
-                    if n == '\n' {
-                        out.push('\n');
-                    }
-                    if prev == '*' && n == '/' {
-                        break;
-                    }
-                    prev = n;
-                }
-            }
-            _ => out.push(c),
-        }
-    }
-    // Trailing commas.
-    let mut result = String::with_capacity(out.len());
-    let bytes: Vec<char> = out.chars().collect();
-    let mut in_str = false;
-    for (i, &c) in bytes.iter().enumerate() {
-        if c == '"' && (i == 0 || bytes[i - 1] != '\\') {
-            in_str = !in_str;
-        }
-        if c == ',' && !in_str {
-            let next = bytes[i + 1..].iter().find(|c| !c.is_whitespace());
-            if matches!(next, Some('}') | Some(']')) {
-                continue;
-            }
-        }
-        result.push(c);
-    }
-    result
 }
 
 const PAGE: usize = 200;
@@ -319,9 +228,9 @@ pub enum XmlNode {
     Pi(String),
 }
 
-pub fn parse_xml(text: &str) -> Result<XmlNode, String> {
+pub fn parse_xml_doc(text: &str) -> Result<XmlNode, roxmltree::Error> {
     let opts = roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() };
-    let doc = roxmltree::Document::parse_with_options(text, opts).map_err(|e| format!("XML 解析失败：{e}"))?;
+    let doc = roxmltree::Document::parse_with_options(text, opts)?;
     fn conv(n: roxmltree::Node) -> Option<XmlNode> {
         if n.is_element() {
             let tag = n.tag_name();
@@ -351,7 +260,7 @@ pub fn parse_xml(text: &str) -> Result<XmlNode, String> {
             None
         }
     }
-    conv(doc.root_element()).ok_or_else(|| "空文档".into())
+    Ok(conv(doc.root_element()).unwrap_or(XmlNode::Element { name: String::new(), attrs: vec![], children: vec![] }))
 }
 
 /// Tabular projection of XML: the shallowest element whose child elements repeat one tag

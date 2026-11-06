@@ -681,6 +681,33 @@ impl App {
         }
     }
 
+    pub fn preview_action(&mut self, idx: usize, action: crate::preview::PreviewAction) {
+        use crate::preview::PreviewAction;
+        match action {
+            PreviewAction::OpenLink(url) => self.open_link(&url),
+            PreviewAction::Goto(offset) => {
+                let d = &mut self.docs[idx];
+                let end = editor::text::next_char(&d.text, offset.min(d.text.len()));
+                d.goto = Some((offset, end));
+                if d.view == ViewMode::Preview {
+                    d.view = ViewMode::Split;
+                }
+            }
+            PreviewAction::InsertCommas(mut offsets) => {
+                let d = &mut self.docs[idx];
+                offsets.sort_unstable();
+                // Back to front so earlier offsets stay valid; one undo step.
+                d.edit.begin_group();
+                for &o in offsets.iter().rev() {
+                    d.replace(o..o, ",", editor::EditKind::Other);
+                }
+                d.edit.end_group();
+                let n = offsets.len();
+                self.toast(format!("已补上 {n} 个逗号（⌘Z 可撤销）"));
+            }
+        }
+    }
+
     pub fn open_link(&mut self, url: &str) {
         if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("mailto:") {
             let _ = std::process::Command::new("/usr/bin/open").arg(url).spawn();
